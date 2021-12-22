@@ -1,0 +1,447 @@
+---
+title: "Final Paper"
+author: "STOR 320.01 Group 5"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+#Put Necessary Libraries Here
+library(class)
+library(kableExtra)
+library(data.table)
+library(ggplot2)
+library(randomForest)
+library(Metrics)
+library(ggpubr)
+library(glmnet)
+library("gridExtra")
+library(plyr)
+library(dplyr)
+library(caret)
+library(repr)
+
+data <- fread('MoviesOnStreamingPlatforms_updated.csv')
+data <- data.frame(data)
+# Import Data Below
+# read_csv()
+movies <- read_csv("MoviesOnStreamingPlatforms_updated.csv")
+tv_shows <- read_csv('tv_shows.csv')
+```
+
+# INTRODUCTION
+
+  In order to maximize entertainment and minimize costs, it is important for consumers to choose the right streaming service that not only shows the highest quality films, but the films they are most interested in. This analysis aims to further understand how streaming services, IMDb score, and Rotten Tomatoes ratings are all interconnected and how these connections can allow for more strategic purchases on the consumer end and more intuitive sales on the content creation end. For the purpose of exploring these connections, the following tables and models attempt to answer two critical questions: What are the most influential factors that IMDb uses to determine their ratings of films? And how do these compare with the characteristics used by Rotten Tomatoes? 
+  
+  We were then able to investigate several characteristics and their relation to critical ratings and streaming service. The characteristics were year of release, target age demographic, director, country, languages the content is available in, and genre. The reason we chose to investigate several factors was to find the one characteristic that affects IMDb and Rotten Tomato scores the most. This way, the private sector could use this information to curate a film selection with the maximum appeal, and consumers could use this information to determine if specific streaming services stream lower or higher quality content.
+
+ Understanding the way IMDb and Rotten Tomatoes, two of the most widely accepted and sought out critical reviewing groups, creates their rating system allows the user to align their spending habits and interests by deciding which streaming services best suit their needs.
+
+# DATA
+  
+  Our selected data set was web scraped in 2020 by Ruchi Bhatia, a data scientist from Mumbai, India. She created the data set with the intention of determining which platforms movies can be found on, as well as the average ratings for movies based on the country of production. It contains 16,774 unique movies that are included with a subscription to Netflix, Hulu, Prime Video, or Disney+. These specific platforms are currently the four most subscribed to streaming services in the US. The table below gives a look into the format of the data set we worked with.
+
+```{r, echo=F, echo=FALSE}
+movies %>%
+  filter(ID<=5) %>%
+  select(Title:`Disney+`,Directors:Language) %>%
+  kable() %>%
+  kable_paper("hover")
+```
+
+  For each movie title, the data set indicates the platform(s) it is on, as well as the average audience ratings from both IMDb and Rotten Tomatoes. The streaming service that offers the movie is designated by a 1 in the respective column, otherwise a 0 will be present. The IMDb ratings are on a scale from 0 to 10 and rounded to the nearest tenth, while the Rotten Tomatoes score is a percentage rounded to the nearest integer. The data set also contains several other characteristics of each movie. Year is a numeric variable that indicates the year each movie was produced, not when it was added to the streaming service. Age is a categorical variable showing recommended minimum age to watch the movie based off the Movie Picture Association film rating system. This is the same system that categorizes films into the widely accepted categories of G, PG, PG-13, and R. The options for age are all, 7+, 13+, and 18+ in alignment with these ratings. The Directors variable lists the director(s) credited with the film, each separated by a comma in the case of multiple directors. Similarly, the Genres variable indicates the genre(s) of the movie, once again separated by a comma. The same goes for Country and Language, which list the countries and languages that the movies are available in.
+  
+```{r,echo=F}
+Mnetflix<-
+  movies %>%
+  na.omit() %>%
+  mutate(`Rotten Tomatoes`=str_replace_all(`Rotten Tomatoes`,"%","")) %>%
+  filter(Netflix==1)
+Mhulu<-
+  movies %>%
+  na.omit() %>%
+  mutate(`Rotten Tomatoes`=str_replace_all(`Rotten Tomatoes`,"%","")) %>%
+  filter(Hulu==1)
+Mprime<-
+  movies %>%
+  na.omit() %>%
+  mutate(`Rotten Tomatoes`=str_replace_all(`Rotten Tomatoes`,"%","")) %>%
+  filter(`Prime Video`==1)
+Mdisney<-
+  movies %>%
+  na.omit() %>%
+  mutate(`Rotten Tomatoes`=str_replace_all(`Rotten Tomatoes`,"%","")) %>%
+  filter(`Disney+`==1)
+
+ggplot() +
+  geom_point(data=Mnetflix,mapping=aes(x=IMDb,y=`Rotten Tomatoes`,color="Netflix")) +
+  geom_point(data=Mhulu,mapping=aes(x=IMDb,y=`Rotten Tomatoes`,color="Hulu")) +
+  geom_point(data=Mprime,mapping=aes(x=IMDb,y=`Rotten Tomatoes`,color="Prime Video")) +
+  geom_point(data=Mdisney,mapping=aes(x=IMDb,y=`Rotten Tomatoes`,color="Disney+")) +
+  scale_color_manual(values=c("Blue","Green","Red","Orange")) +
+  xlab("IMDb Score") +
+  ylab("Rotten Tomatoes %") +
+  guides(color=guide_legend(title="Streaming Service")) +
+  ggtitle("Movie Ratings for Streaming Services") +
+  scale_y_discrete(breaks=c(10,20,30,40,50,60,70,80,90))
+```
+
+By visualizing the IMDb and Rotten Tomatoes ratings against each other in this manner, we can see that these groups rate films in a similar way, but these rating systems are not the same. In order to find out which rating we as the consumer trust more, we need to understand the factors that lend to these rankings. Further, grouping these points by streaming service shows that no streaming service is has an objectively better movie selection, and it is therefore up to the consumer to place themselves within these rating systems and decide for themselves what they care about and which streaming service is best catered to their needs.
+
+# RESULTS
+
+  In finding the best prediction models, we wanted to use two modelling functions with opposing potential biases paired with cross validation to ensure we found coefficient approximations with the highest accuracy but without over-fitting the data. Due to this, the two tests we used to find the best model for predicting IMDb and Rotten Tomatoes ratings was Random Forest Regression and Lasso Regression. Random Forest Regression allowed us to aggregate many decision models based off the predictor variables and run them in parallel to produce a mean regression prediction. This form of regression was helpful to our analysis because the function pulls randomly from the data set to find the model with the lowest error, and tests the strength of all potentially predictive features over the outcome. We also utilized Lasso Regression to find the best fit model for predicting critical ratings because of the multicollinearity of the data, and because Lasso Regression balances the bias towards over-fitting in Random Forest Regression. Using Lasso Regression to test the strength of each predictor variable and using both the Lasso Approximations and  Random Forest Approximations for each coefficient eliminated the biases of both modelling functions to find the most accurate predictions for each rating system.
+
+### Prediction of IMDb Rating
+
+
+#### Random Forest Regression
+```{r, echo=FALSE}
+imdb <- select(data, 'Year', 'Runtime', 'Age', 'Language', 'Netflix', 'Hulu', 'Prime.Video', 'Country', 'Disney.', 'Genres', 'Directors', 'IMDb')
+
+#treating missing values
+imdb[imdb==''] <- NA
+miss <- colSums(is.na(imdb))
+miss <- data.frame(variable=names(miss),number=miss)
+miss$Percentage <- miss$number/nrow(imdb)
+pdf('pic.pdf',width=6,height=4)
+
+ggplot(miss, aes(variable, Percentage)) +
+  geom_bar(stat = 'identity') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  xlab('')
+
+# filling missing values
+for(i in c('Age','Country','Disney.','Language')){
+  inx <- is.na(imdb[,i])
+  data[inx,i] <- names(which.max(table(imdb[,i])))
+}
+
+
+# number of trees
+imdb_flt <- na.omit(imdb)
+```
+
+```{r, echo=FALSE}
+rf <- randomForest(IMDb~., imdb_flt, importance=T)
+plot(rf, main='Random Forest: Tree Number v Accuracy')
+```
+
+The graph above illustrates the error of predictions graphed against the number of trees used in generating that prediction. Random Forest Regression aims to find the most accurate model of prediction by generating and comparing a multitude of decision trees. The more trees added to the model, the more accurate it will be but the more overly complicated and over-fit it can become. The number of trees used in our prediction was generated to be close to the horizontal asymptote of this graph, such that the prediction was as accurate as possible but not overly complicated.
+
+```{r, echo=FALSE}
+n <- which.min(rf$mse)
+rf <- randomForest(IMDb~., imdb_flt, importance = T, ntree = n)
+
+# the importance of variables
+varImpPlot(rf, main = 'Relative Importance of Each Variable in Prediction')
+```
+
+The plot above illustrates the relative importance of each variable, which was used in the determination of coefficients to provide the most accurate model. Focusing on the percentage increased in mean squared error, it's clear to see that 'Genres' has the highest variable importance, followed by 'Runtime' and 'Year', resulting in higher predictive power in the analysis. Removing these variables of high importance generates significant loss of accuracy on the prediction results. On the other hand, looking at the table of increased node purity, we see some differences compared to percentage increase in mean square error, which is one of the results of measuring the node impurity. Splits of the dataset based on each variable is biased towards variables with many classes, which also biases the importance measure. In our case, the bias results in different orders regarding the importance of variables. However, 'Genres' and 'Runtime' have the highest importance in both ways. 
+
+```{r, echo=FALSE}
+# prediction
+pred_imdb <- predict(rf, imdb_flt)
+pred_real_imdb <- data.frame(pred_imdb, real = imdb_flt$IMDb)
+
+# RMSE(Root Mean Square Error) of the predicted values and the observed values
+rmse_imdb = rmse(pred_imdb, imdb_flt$IMDb)
+
+plot1 = ggplot(pred_real_imdb,aes(pred_imdb,real))+
+  geom_point()+
+  theme_bw()+
+  xlab('IMDb')+
+  ylab('Prediction')+
+  ggtitle('Accuracy of Predictions')+
+  stat_cor()
+
+plot1
+```
+
+The figure above illustrates the accuracy of the Random Forest Predictions against the actual IMDb ratings for each title, as well as the R and p-values of the model. The shape of the points shows a positive correlation between the prediction and observed IMDb rating, roughly resembling a straight line which indicates a highly accurate model. This is reflected in the R value, the p-value, and the Root Mean Squared Error. These results indicate that the relative importance of each coefficient measured by Random Forest Regression is an accurate prediction of how IMDb is measured.
+
+```{r, echo=FALSE}
+rmse_table1 = tibble(
+  'Root Mean Squared Error' = 
+  rmse_imdb
+) %>%
+  kable() %>% kable_minimal(full_width=FALSE)
+
+rmse_table1
+
+```
+
+The Root Mean Squared Error indicates that Random Forest is a very accurate tool to test the relative importance of each coefficient in predicting IMDb score. The coefficients listed in order of importance by this model are `Genre`, `Runtime`, `Year`, `Prime.Video`,  `Age`, `Language`, `Netflix`, `Country`, `Disney`, `Hulu`, and `Directors`.
+
+#### Lasso Regression
+
+
+```{r, echo=FALSE}
+
+imdb2 = select(data, 'Year', 'Age', 'Netflix', 'Hulu', 'Prime.Video', 'Disney.', 'Directors', 'Genres', 'Country', 'Language', 'Runtime', 'IMDb')
+
+#rt$Rotten.Tomatoes <- as.numeric(sub("%", "", rt$Rotten.Tomatoes,fixed=TRUE))/100
+smp_size <- floor(0.75 * nrow(imdb2))
+
+set.seed(125)
+train_ind1 <- sample(seq_len(nrow(imdb2)), size=smp_size)
+
+train_imdb = imdb2[train_ind1,] %>% na.omit()
+test_imdb = imdb2[-train_ind1,] %>% na.omit()
+
+#define response variable
+train_y_imdb <- train_imdb$`IMDb`
+test_y_imdb <- test_imdb$`IMDb`
+
+
+#define matrix of predictor variables
+train_x_imdb <- data.matrix(train_imdb[, c('Year', 'Age', 'Netflix', 'Hulu', 'Prime.Video', 'Disney.', 'Directors', 'Genres', 'Country', 'Language', 'Runtime')])
+test_x_imdb <- data.matrix(test_imdb[, c('Year', 'Age', 'Netflix', 'Hulu', 'Prime.Video', 'Disney.', 'Directors', 'Genres', 'Country', 'Language', 'Runtime')])
+
+#perform k-fold cross-validation to find optimal lambda value
+cv_model_imdb <- cv.glmnet(train_x_imdb, train_y_imdb, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+
+best_lambda_imdb <- cv_model_imdb$lambda.min
+
+plot(cv_model_imdb, main='Lambda v MSE') 
+
+
+```
+
+The plot above shows, with error margins, the Mean Squared Error of each Regression model against the Lambda used in creating that prediction. The goal of Lasso Regression is to find and use the Lambda value that minimizes error without making the model over-fit to the data. The best lambda calculated by the model and used in our analysis is the one which minimizes error, which appears to be along the horizontal anymptote.
+
+```{r, echo=FALSE}
+best_model <- glmnet(train_x_imdb, train_y_imdb, alpha = 1, lambda = best_lambda_imdb)
+matrix_imdb = coef(best_model)
+
+tibble(
+  'Variable' = c('Intercept', 'Year', 'Age', 'Netflix', 'Hulu', 'Amazon Prime Video', 'Disney +', 'Directors', 'Genres', 'Country', 'Language', 'Run Time'),
+  'Coefficients' = c(matrix_imdb[1], matrix_imdb[2],matrix_imdb[3],matrix_imdb[4],matrix_imdb[5],matrix_imdb[6],matrix_imdb[7],matrix_imdb[8],matrix_imdb[9],matrix_imdb[10],matrix_imdb[11],matrix_imdb[12])
+
+  ) %>% kable() %>% kable_minimal(full_width=FALSE)
+```
+
+This table displays the coefficients of the regression model generated to predict IMDb. None of the coefficients are zero or close to zero, indicating that the Lasso method found each of the variables to be important in predicting a movie's IMDb rating. The highest coefficients are the coefficients for whether it is available on Disney +, the Languages it is available in, and whether it is available on Hulu and Netflix. These coefficients indicate that movies that are available on these platforms and that are available in many languages are the most popular on IMDb. The lowest coefficients are the coefficients for the year a movie was produced and the age restriction of the movie based off its rating. These coefficients indicate that more popular movies are generally older, and movies that do not have age restrictions based off content. 
+
+```{r, echo=FALSE}
+eval_results <- function(true, predicted, df) {
+  SSE <- sum((predicted - true)^2)
+  SST <- sum((true - mean(true))^2)
+  R_square <- 1 - SSE / SST
+  RMSE = sqrt(SSE/nrow(df))
+
+  data.frame(
+  RMSE = RMSE,
+  Rsquare = R_square
+)
+
+}
+predictions_train_1 <- predict(cv_model_imdb, s = best_lambda_imdb, newx = train_x_imdb)
+r11 = eval_results(train_y_imdb, predictions_train_1, train_imdb)
+
+predictions_test_1 <- predict(cv_model_imdb, s = best_lambda_imdb, newx = test_x_imdb)
+r21 = eval_results(test_y_imdb, predictions_test_1, test_imdb)
+
+# Model performance metrics
+tibble(
+  ' ' = c('RMSE', 'R square'),
+  'Test Set' = c(r11[[1]], r11[[2]]),
+  'Train Set' = c(r21[[1]], r21[[2]])
+) %>% kable() %>% kable_minimal(full_width=FALSE)
+
+```
+
+In the calculation of Root Mean Squared Error and R-squared values, it is worth noting that the R-squared value for both the training set and the testing set is close to 0. This means that Lasso Regression was able to quantify the relationship between each variable and the IMDb rating, but these coefficients were not able to accurately predict IMDb ratings, and that the relative importance calculated by the Random Forest Regression may be more appropriate for comparison.
+
+### Prediction of Rotten Tomatoes Ranking
+
+#### Random Forest Regression
+
+```{r, echo=FALSE}
+rt <- select(data, 'Year', 'Runtime', 'Age', 'Language', 'Netflix', 'Hulu', 'Prime.Video', 'Country', 'Disney.', 'Genres', 'Directors', 'Rotten.Tomatoes')
+
+#treating missing values
+rt[rt==''] <- NA
+miss <- colSums(is.na(rt))
+miss <- data.frame(variable=names(miss),number=miss)
+miss$Percentage <- miss$number/nrow(rt)
+pdf('pic.pdf',width=6,height=4)
+
+ggplot(miss, aes(variable, Percentage)) +
+  geom_bar(stat = 'identity') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  xlab('')
+
+# filling missing values
+for(i in c('Age','Country','Disney.','Language')){
+  inx <- is.na(rt[,i])
+  data[inx,i] <- names(which.max(table(rt[,i])))
+}
+
+# number of trees
+rt_flt <- na.omit(rt)
+rt_flt$Rotten.Tomatoes <- as.numeric(sub("%", "", rt_flt$Rotten.Tomatoes,fixed=TRUE))/100
+```
+
+```{r, echo=FALSE}
+rf_rt <- randomForest(Rotten.Tomatoes~., rt_flt, importance = T)
+
+plot(rf, main='Random Forest: Tree Number v Accuracy')
+```
+
+The graph above illustrates the error of predictions graphed against the number of trees used in generating that prediction. The number of trees used in our prediction was generated to be close to the horizontal asymptote of this graph, such that the prediction was as accurate as possible but not overly complicated. The shape of this graph is the same as the graph of tree number v accuracy in the random forest regression to predict IMDb score, indicating that predicting Rotten Tomatoes is not more or less complicated. This makes sense from our data because both models use the same variables.
+
+```{r, echo=FALSE}
+n_rt <- which.min(rf_rt$mse)
+rf_rt <- randomForest(Rotten.Tomatoes~., rt_flt, importance = T, ntree = )
+
+# the importance of variables
+varImpPlot(rf_rt, main='Relative Importance of Each Variable in Prediction')
+```
+
+The plot above illustrates the relative importance of each variable, which was used in the determination of coefficients to provide the most accurate model. As the same as before when predicting IMDb ratings, there are differences in orders regarding the importance of each variables between the two methods we see above. Nevertheless, the results illustrate that 'Genres' has the highest importance of all variables in both figures, which means it has the highest predictive power and is the most decisive factor in the future prediction analysis. 
+
+
+```{r, echo=FALSE}
+# prediction
+pred_rt <- predict(rf_rt, rt_flt)
+pred_real_rt <- data.frame(pred_rt, real_rt = rt_flt$Rotten.Tomatoes)
+
+# RMSE(Root Mean Square Error) of the predicted values and the observed values
+rmse_rt = rmse(pred_rt, rt_flt$Rotten.Tomatoes)
+
+plot2 = ggplot(pred_real_rt,aes(pred_rt,real_rt))+
+  geom_point()+
+  theme_bw()+
+  xlab('Rotten Tomatoes')+
+  ylab('Prediction')+
+  ggtitle('Accuracy of Predictions')+
+  stat_cor()
+
+ plot2
+```
+
+The figure above illustrates the accuracy of the Random Forest Predictions against the actual IMDb ratings for each title, as well as the R value and p-value of the model. As displayed in the graph, the R value for this model is higher than the R value of the Random Forest Regression on the IMDb score. Supporting this conclusion, the Root Mean Squared Error is much lower than the Root Mean Squared Error of the Random Forest model used to predict IMDb ratings. This means that the rating system used by Rotten Tomatoes is more consistent and predictable than the rating system of IMDb.
+
+```{r, echo=FALSE}
+
+tibble(
+  'Root Mean Squared Error' = 
+  rmse_rt
+) %>%
+  kable() %>% kable_minimal(full_width=FALSE)
+
+
+```
+
+The Root Mean Squared Error indicates that Random Forest is a very accurate tool to test the relative importance of each coefficient in predicting Rotten Tomatoes score. The coefficients listed in order of importance by this model are `Genre`, `Year`, `Language`, `Runtime`,  `Prime.Video`, `Age`, `Country`, `Disney.`, `Netflix`, `Hulu`, and `Directors`.
+
+#### Lasso Regression
+
+
+```{r, echo=FALSE}
+rt <- data[,-c(6)] %>% na.omit()
+
+rt$Rotten.Tomatoes <- as.numeric(sub("%", "", rt$Rotten.Tomatoes,fixed=TRUE))/100
+
+smp_size <- floor(0.75 * nrow(rt))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(rt)), size=smp_size)
+
+train_rt = rt[train_ind,] %>% na.omit()
+test_rt = rt[-train_ind,] %>% na.omit()
+
+#define response variable
+train_y_rt <- train_rt$`Rotten.Tomatoes`
+test_y_rt <- test_rt$`Rotten.Tomatoes`
+
+
+#define matrix of predictor variables
+train_x_rt <- data.matrix(train_rt[, c('Year', 'Age', 'Netflix', 'Hulu', 'Prime.Video', 'Disney.', 'Directors', 'Genres', 'Country', 'Language', 'Runtime')])
+test_x_rt <- data.matrix(test_rt[, c('Year', 'Age', 'Netflix', 'Hulu', 'Prime.Video', 'Disney.', 'Directors', 'Genres', 'Country', 'Language', 'Runtime')])
+
+#perform k-fold cross-validation to find optimal lambda value
+cv_model_rt <- cv.glmnet(train_x_rt, train_y_rt, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+
+best_lambda_rt <- cv_model_rt$lambda.min
+
+plot(cv_model_rt, main='Lambda v MSE') 
+```
+
+The plot above shows the mean squared error of each regression model against the lambda used in creating that prediction. The best lambda calculated by the model and used in our analysis is the one which minimizes error, which appears to be along the horizontal asymptote. The shape of this graph is similar to the Lambda v MSE table used in predicting IMDb rating, but the verticle axis begins at a higher mean squared error. This means that although we can minimize the error in this prediction model, we will not be able to predict the Rotten Tomatoes rating using lasso regression as we were albe to predict using lasso regression to predict IMDb.
+
+
+```{r, echo=FALSE}
+best_model_rt <- glmnet(train_x_rt, train_y_rt, alpha = 1, lambda = best_lambda_rt)
+matrix_rt = coef(best_model_rt)
+
+tibble(
+  'Variable' = c('Intercept', 'Year', 'Age', 'Netflix', 'Hulu', 'Amazon Prime Video', 'Disney +', 'Directors', 'Genres', 'Country', 'Language', 'Run Time'),
+  'Coefficients' = c(matrix_rt[1], matrix_rt[2],matrix_rt[3],matrix_rt[4],matrix_rt[5],matrix_rt[6],matrix_rt[7],matrix_rt[8],matrix_rt[9],matrix_rt[10],matrix_rt[11],matrix_rt[12])
+
+  ) %>% kable() %>% kable_minimal(full_width=FALSE)
+```
+
+This table displays the coefficients of the regression model generated to predict Rotten Tomatoes. We can determine if the variables are important for predicting by the value of the coefficient. As we can see in the table, "Hulu" and "Directors" have 0 value, which means they are not important in the prediction of the Rotten Tomatoes rating. The highest coefficients are the coefficients for whether it is the age restriction, the genre, and the languages that are available`Age`, `Genre`, and `Language`. These factors are different from the ones determine IMDb score. The lowest coefficients are the coefficients for if they are on Prime video and the countries available `Prime.Video` and `Country`.
+
+```{r, echo=FALSE}
+eval_results <- function(true, predicted, df) {
+  SSE <- sum((predicted - true)^2)
+  SST <- sum((true - mean(true))^2)
+  R_square <- 1 - SSE / SST
+  RMSE = sqrt(SSE/nrow(df))
+
+  data.frame(
+  RMSE = RMSE,
+  Rsquare = R_square
+)
+
+}
+predictions_train <- predict(cv_model_rt, s = best_lambda_rt, newx = train_x_rt)
+r1 = eval_results(train_y_rt, predictions_train, train_rt)
+
+predictions_test <- predict(cv_model_rt, s = best_lambda_rt, newx = test_x_rt)
+r2 = eval_results(test_y_rt, predictions_test, test_rt)
+
+# Model performance metrics
+tibble(
+  ' ' = c('RMSE', 'R square'),
+  'Test Set' = c(r1[[1]], r1[[2]]),
+  'Train Set' = c(r2[[1]], r2[[2]])
+) %>% kable() %>% kable_minimal(full_width=FALSE)
+
+```
+
+Similar to the findings of the Lasso Regression model, the R-squared value for both the training set and the testing set is close to 0. Therefore, the predictive value of the coefficients in the lasso model may be less useful than the relative importance calculated by the Random Forest Regression.
+
+### Explanation of Results 
+
+The results from the Random Forest Regression to predict IMDb ratings showed that the factors of each movie in order of importance are genre, run time, year produced, availability on Amazon Prime Video, age restriction, languages available in, availability on Netflix, Countries available in, availability on Disney +, availability on Hulu, and Directors. The results of this regression also found that the Directors factor is close to zero, meaning that the director of a movie has no impact on the IMDb rating of the film. On the other hand, the Random Forest Regression to predict Rotten Tomatoes showed that the most important factors of each movie in order of importance are genre, year produced, languages available in, run time, age restriction, availability on Amazon Prime Video, availability on Disney +, Countries available in, availability on Netflix, availability on Hulu, and Directors. Between both models, the director of the film has no influence on the IMDb rating of the movie, the genre was the most important facotr, and the influences of age restrictions, countries available in, and availability on Hulu were the same. However, we can also see that IMDb places a greater emphasis on the run time of the movie in determining its rating, and less emphasis on year produced and languages available in than Rotten Tomatoes. All of the streaming services have little influence on the Rotten Tomatoes score, indicating that all of the streaming services provide similar movies in terms of Rotten Tomatoes scores. However, the influence of the availability on Amazon Prime Video is much higher in determining IMDb score than any of the other streaming services, indicating that this service may be better catering to audiences who value IMDb ratings.
+
+The Root Mean Squared Error for each of the models we developed were low, but the R-square values for the Lasso Regression models we developed were close to zero. This indicates that while we are able to claim the relative importance of movie characteristics for each rating system within our set, the values of the coefficients we found for each model were poor predictive tools for predicting critical ratings of other films.
+
+
+
+# CONCLUSION
+
+The purpose of this project was to deepen our understanding of film rating systems in order to allow for more strategic content sales and purchases in both the private sector and the consumer end. What we found were that almost all film characteristics we analyzed played some role in predicting the ratings on both IMDb and Rotten Tomatoes ratings, with the exception of `Directors` in both rating systems. Using the Lasso method, we found that film availability on Disney+, languages the film is available in, and availability on Hulu and Netflix were the most correlated with higher IMDb ratings, and age restriction, the genre, and the languages that are available is the most important factors for Rotten Tomatoes. From these results, it can be concluded that Disney +, Netflix, and Hulu are better at selecting movies based on the same criteria as IMDb. Conversely, we found that year of production and age restrictions were least effective predictors of IMDb rating. With this in mind, the private sector can use this information to develop better strategies for maximizing content rating. On the consumer end, this information lets them know that Disney+, Hulu, and Netflix, have the highest rated content based on the other criteria weighted in IMDb scores.
+
+These findings let us know that the highest rated content is typically most widely available to the public. We were surprised to find that factors such as film age had little relevance, but we later found that this is because it does not affect how available a movie is. We believe further analysis should pay special attention to newer films and using this information to not only predict ratings but also predict revenue generated by newer movies. This could potentially be used by writers, marketers, and directors to improve profit margins in future films and television shows. We also did little to determine whether factors such as being available on Netflix were the cause of their higher ratings or only correlated with higher ratings. For consumers, this is not very relevant as they already know that Netflix has higher-rated shows. Yet content creators can use this information to determine if being featured on Netflix will increase their ratings or rather being featured is simply a byproduct of high-quality content. In predicting Rotten Tomatoes scores, we found that the most influential factors were the film characteristics of genre, year produced, and run time, and that the streaming service that was most well equipped to meet these criteria was Amazon Prime Video. Therefore, if a consumer feels more aligned to the ratings of IMDb, it is a better investment to subscribe to Disney +, but if they feel more aligned with Rotten Tomatoes ratings, they should instead pay for Amazon Prime. 
+
+In the future, other statisticians can build upon this work by identifying and testing more specific variables such as how actors, franchise, production company, etc affect average critical ratings. There is also room to further investigate which demographics use which streaming services the most for the purpose of better preparing companies to reach their target audience more efficiently. If they can reach more specific demographics, companies can tailor their content in a fashion that allows for more personalized content on the consumer end.  This kind of work could potentially be incorporated in future algorithms for predicting “for you” tabs on the front pages of streaming platforms. In order to complete any of this research, however, we would need access to more specific data sets regarding revenue and actor presence in content. Although difficult, such research would be to create a more harmonious relationship between consumers and producers alike. 
+
+
+
+
+
+
+
